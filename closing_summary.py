@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
@@ -26,9 +25,18 @@ from typing import Any, Callable
 
 import pandas as pd
 
-ProgressCallback = Callable[[str], None]
+from futures_data import (
+    EXCHANGE_LABEL,
+    compare_variety_coverage,
+    dominant_by_date,
+    fetch_all_daily_parallel,
+    fmt_date,
+    load_sina_main_universe,
+    parse_yyyymmdd,
+    resolve_trade_date_from_df,
+)
 
-EXCHANGES = ("SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX")
+ProgressCallback = Callable[[str], None]
 
 # 品种 → 板块（用于板块涨跌统计）
 VARIETY_SECTOR: dict[str, str] = {
@@ -49,22 +57,9 @@ VARIETY_SECTOR: dict[str, str] = {
     "SC": "能源", "NR": "能源", "EC": "航运",
 }
 
-EXCHANGE_LABEL: dict[str, str] = {
-    "SHFE": "上期所", "DCE": "大商所", "CZCE": "郑商所",
-    "CFFEX": "中金所", "INE": "能源中心", "GFEX": "广期所",
-}
-
 
 def _noop(_: str) -> None:
     pass
-
-
-def _parse_yyyymmdd(s: str) -> date:
-    return datetime.strptime(s, "%Y%m%d").date()
-
-
-def _fmt_date(d: date) -> str:
-    return d.strftime("%Y%m%d")
 
 
 def _weekday_cn(d: date) -> str:
@@ -110,6 +105,9 @@ class ClosingSummaryResult:
     sector_stats: list[dict[str, Any]] = field(default_factory=list)
     volume_leaders: list[dict[str, Any]] = field(default_factory=list)
     follow_up_hints: list[str] = field(default_factory=list)
+    coverage: dict[str, Any] = field(default_factory=dict)
+    fetch_errors: list[dict[str, str]] = field(default_factory=list)
+    exchanges_ok: list[str] = field(default_factory=list)
     data_source: str = "akshare get_futures_daily"
     generated_at: str = ""
 
@@ -123,83 +121,26 @@ class ClosingSummaryResult:
             f"生成时间: {self.generated_at}",
             f"市场广度: 涨 {self.up_count} | 跌 {self.down_count} | 平 {self.flat_count}"
             f"（共 {self.total_varieties} 品种）",
-            "",
-            self.push_message,
         ]
+        if self.coverage:
+            lines.append(
+                f"品种覆盖: {self.coverage.get('found_count', 0)}"
+                f"/{self.coverage.get('expected_count', 0)}"
+                f"（{self.coverage.get('coverage_pct', 0)}%）"
+            )
+        if self.fetch_errors:
+            err_txt = "；".join(
+                f"{e.get('label', e.get('exchange'))}: {e.get('error', '')[:40]}"
+                for e in self.fetch_errors
+            )
+            lines.append(f"⚠ 交易所拉取异常: {err_txt}")
+        missing = self.coverage.get("missing_varieties") or []
+        if missing:
+            show = ", ".join(missing[:12])
+            suffix = f" 等{len(missing)}个" if len(missing) > 12 else ""
+            lines.append(f"未覆盖品种: {show}{suffix}")
+        lines.extend(["", self.push_message])
         return "\n".join(lines)
-
-
-def load_main_symbol_names(on_progress: ProgressCallback | None = None) -> dict[str, str]:
-    """新浪主力连续名称表：symbol → 中文名。"""
-    import akshare as ak
-
-    report = on_progress or _noop
-    report("      拉取主力连续品种名称 ...")
-    df = ak.futures_display_main_sina()
-    mapping: dict[str, str] = {}
-    for _, row in df.iterrows():
-        sym = str(row.get("symbol", "")).upper()
-        name = str(row.get("name", sym))
-        if sym:
-            mapping[sym] = name
-        variety = re.match(r"^([A-Z]+)", sym)
-        if variety:
-            mapping[variety.group(1)] = name.replace("连续", "").strip() or name
-    return mapping
-
-
-def fetch_exchange_daily(
-    start: str,
-    end: str,
-    market: str,
-    *,
-    on_progress: ProgressCallback | None = None,
-) -> pd.DataFrame:
-    import akshare as ak
-
-    report = on_progress or _noop
-    report(f"      {EXCHANGE_LABEL.get(market, market)} ({start}~{end}) ...")
-    df = ak.get_futures_daily(start_date=start, end_date=end, market=market)
-    if df is None or df.empty:
-        return pd.DataFrame()
-    out = df.copy()
-    out["exchange"] = market
-    out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y%m%d")
-    for col in ("open", "high", "low", "close", "volume", "open_interest", "turnover", "settle", "pre_settle"):
-        if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce")
-    return out
-
-
-def fetch_all_daily(
-    start: str,
-    end: str,
-    *,
-    on_progress: ProgressCallback | None = None,
-) -> pd.DataFrame:
-    frames: list[pd.DataFrame] = []
-    for ex in EXCHANGES:
-        try:
-            sub = fetch_exchange_daily(start, end, ex, on_progress=on_progress)
-            if not sub.empty:
-                frames.append(sub)
-        except Exception:
-            continue
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
-
-
-def dominant_by_date(df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
-    """某日各品种持仓量最大合约。"""
-    day = df[df["date"] == trade_date].copy()
-    if day.empty:
-        return day
-    day = day.dropna(subset=["open_interest", "settle"])
-    if day.empty:
-        return day
-    idx = day.groupby("variety")["open_interest"].idxmax()
-    return day.loc[idx].sort_values("variety")
 
 
 def snapshots_from_dominant(
@@ -235,36 +176,6 @@ def snapshots_from_dominant(
             )
         )
     return rows
-
-
-def resolve_latest_trade_date(
-    as_of: date,
-    *,
-    lookback_days: int = 15,
-    on_progress: ProgressCallback | None = None,
-) -> tuple[str, bool]:
-    """
-    解析最近交易日。
-
-    Returns:
-        (trade_date YYYYMMDD, is_rest_day)
-    """
-    report = on_progress or _noop
-    start = as_of - timedelta(days=lookback_days)
-    report(f"[1/3] 解析交易日（基准 {as_of}）...")
-    df = fetch_all_daily(_fmt_date(start), _fmt_date(as_of), on_progress=on_progress)
-    if df.empty:
-        raise ValueError("未能拉取交易所日线数据，请检查网络或 akshare")
-
-    available = sorted(df["date"].unique())
-    as_of_str = _fmt_date(as_of)
-    if as_of_str in available:
-        return as_of_str, False
-
-    prior = [d for d in available if d < as_of_str]
-    if not prior:
-        raise ValueError(f"近 {lookback_days} 日内无可用交易日数据")
-    return prior[-1], True
 
 
 def compute_sector_stats(snapshots: list[VarietySnapshot]) -> list[dict[str, Any]]:
@@ -330,9 +241,12 @@ def build_push_message(
     top_n: int,
     sector_stats: list[dict[str, Any]],
     hints: list[str],
+    *,
+    coverage: dict[str, Any] | None = None,
+    fetch_errors: list[dict[str, str]] | None = None,
 ) -> str:
     d = datetime.strptime(trade_date, "%Y%m%d").date()
-    title = f"📊 期货收盘总结 {trade_date}（周{_weekday_cn(d)}）"
+    title = f"期货收盘总结 {trade_date}（周{_weekday_cn(d)}）"
     if is_rest_day:
         title += " · 最近交易日"
 
@@ -347,9 +261,17 @@ def build_push_message(
     lines = [
         title,
         f"市场：涨 {up} / 跌 {down} / 平 {flat}（{len(snapshots)} 品种主力）",
-        "",
-        f"🔺 涨幅前{top_n}",
     ]
+    if coverage and coverage.get("expected_count"):
+        lines.append(
+            f"覆盖 {coverage['found_count']}/{coverage['expected_count']} 品种"
+            f"（{coverage['coverage_pct']}%）"
+        )
+    if fetch_errors:
+        failed = "、".join(e.get("label", e.get("exchange", "")) for e in fetch_errors)
+        lines.append(f"⚠ 数据异常: {failed}")
+
+    lines.extend(["", f"🔺 涨幅前{top_n}"])
     for i, s in enumerate(gainers, 1):
         lines.append(
             f"  {i}. {s.name} {s.symbol}  {s.change_pct:+.2f}%  "
@@ -379,6 +301,11 @@ def build_push_message(
         for h in hints:
             lines.append(f"  · {h}")
 
+    missing = (coverage or {}).get("missing_varieties") or []
+    if missing and len(missing) <= 8:
+        lines.append("")
+        lines.append(f"ℹ 未纳入: {', '.join(missing)}")
+
     lines.append("")
     lines.append("— 数据来源 akshare 交易所日线 · 主力=持仓量最大合约")
     return "\n".join(lines)
@@ -388,24 +315,37 @@ def run_closing_summary(
     *,
     as_of_date: str | None = None,
     top_n: int = 5,
+    lookback_days: int = 15,
     on_progress: ProgressCallback | None = None,
 ) -> ClosingSummaryResult:
-    """生成收盘总结。"""
+    """生成收盘总结（单次并行拉取，不重复请求）。"""
     report = on_progress or _noop
-    as_of = _parse_yyyymmdd(as_of_date) if as_of_date else date.today()
-    as_of_str = _fmt_date(as_of)
+    as_of = parse_yyyymmdd(as_of_date) if as_of_date else date.today()
+    as_of_str = fmt_date(as_of)
 
-    trade_date, is_rest = resolve_latest_trade_date(as_of, on_progress=report)
+    start = fmt_date(as_of - timedelta(days=lookback_days))
+    end = as_of_str
 
-    report(f"[2/3] 拉取 {trade_date} 主力合约数据 ...")
-    start = _parse_yyyymmdd(trade_date) - timedelta(days=3)
-    df = fetch_all_daily(_fmt_date(start), trade_date, on_progress=report)
+    report(f"[1/3] 拉取各交易所日线（并行，{start}~{end}）...")
+    fetch_result = fetch_all_daily_parallel(start, end, on_progress=report)
+    if not fetch_result.ok:
+        err_detail = "; ".join(
+            f"{e.get('label')}:{e.get('error', '')[:30]}" for e in fetch_result.errors
+        )
+        raise ValueError(f"未能拉取交易所日线数据。{err_detail or '请检查网络'}")
+
+    df = fetch_result.df
+    trade_date, is_rest = resolve_trade_date_from_df(as_of, df)
+
+    report(f"[2/3] 解析 {trade_date} 主力合约 + 品种覆盖 ...")
     dominant = dominant_by_date(df, trade_date)
     if dominant.empty:
         raise ValueError(f"交易日 {trade_date} 无有效主力合约数据")
 
-    name_map = load_main_symbol_names(on_progress=report)
+    name_map, expected_varieties = load_sina_main_universe(on_progress=report)
     snapshots = snapshots_from_dominant(dominant, name_map)
+    found_varieties = [s.variety for s in snapshots]
+    coverage = compare_variety_coverage(expected_varieties, found_varieties)
 
     report("[3/3] 汇总排名与推送文案 ...")
     sorted_snaps = sorted(snapshots, key=lambda s: s.change_pct, reverse=True)
@@ -415,12 +355,14 @@ def run_closing_summary(
 
     sector_stats = compute_sector_stats(snapshots)
     hints = build_follow_up_hints(gainers, losers, vol_leaders, sector_stats)
-    push = build_push_message(trade_date, is_rest, snapshots, top_n, sector_stats, hints)
+    push = build_push_message(
+        trade_date, is_rest, snapshots, top_n, sector_stats, hints,
+        coverage=coverage, fetch_errors=fetch_result.errors,
+    )
 
     up = sum(1 for s in snapshots if s.change_pct > 0)
     down = sum(1 for s in snapshots if s.change_pct < 0)
     flat = len(snapshots) - up - down
-
     msg = "休息日，展示最近交易日数据。" if is_rest else "当日收盘总结。"
 
     return ClosingSummaryResult(
@@ -438,6 +380,11 @@ def run_closing_summary(
         sector_stats=sector_stats,
         volume_leaders=[v.to_dict() for v in vol_leaders],
         follow_up_hints=hints,
+        coverage=coverage,
+        fetch_errors=fetch_result.errors,
+        exchanges_ok=[
+            EXCHANGE_LABEL.get(ex, ex) for ex in fetch_result.successes
+        ],
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 

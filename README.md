@@ -22,6 +22,7 @@ Project_Futures/
 ├── vnpy_engine.py           # vnpy 回测引擎集成（数据加载、手续费、进度）
 ├── strategy_monitor.py      # 盘中策略信号检测
 ├── closing_summary.py       # 每日收盘总结（独立模块，可单独运行）
+├── futures_data.py          # 交易所日线并行拉取、主力筛选（共享层）
 ├── akshare_futures.md       # akshare 期货接口文档（接口库数据源）
 ├── requirements.txt         # Python 依赖
 ├── strategy_registry.json   # 自定义策略注册清单（自动生成）
@@ -198,6 +199,18 @@ skill.backtest_strategy("ma_crossover", "RB0",
 - `signals` 列表：每笔成交的开多/平多/开空/平空记录
 - 可选生成净值曲线图至 `output/backtest/`
 
+## 数据源对照（重要）
+
+不同功能 deliberately 使用不同数据源，避免混用结论：
+
+| 功能 | 模块 | 数据源 | 合约/价格含义 |
+|------|------|--------|----------------|
+| 策略回测 | `vnpy_engine` | `get_futures_daily` | 持仓量主力换月，分合约拼接 |
+| 盘中检测 | `strategy_monitor` | 新浪 `futures_zh_daily_sina` + 分钟线 | 新浪主连（如 RB0），边缘触发 |
+| 收盘总结 | `closing_summary` | `get_futures_daily` 并行 6 交易所 | 当日持仓量最大合约，结算价涨跌 |
+
+回测与收盘总结的主力逻辑一致；盘中监控与回测信号可能略有差异，属预期行为。
+
 ## 盘中检测说明
 
 - **数据源**：新浪日线 + 1 分钟线刷新（`daily`），或 1/5/15/30/60 分钟 K 线
@@ -207,17 +220,20 @@ skill.backtest_strategy("ma_crossover", "RB0",
 
 ## 每日收盘总结
 
-独立模块 [`closing_summary.py`](closing_summary.py)，与策略回测/盘中检测逻辑隔离。
+独立模块 [`closing_summary.py`](closing_summary.py)，底层共享 [`futures_data.py`](futures_data.py)。
 
+- **拉取方式**：6 交易所**并行**、**单次**请求（不再重复拉两轮）
 - **数据源**：akshare `get_futures_daily`（上期所/大商所/郑商所/中金所/能源中心/广期所）
 - **主力定义**：各品种当日**持仓量最大**合约（与回测换月逻辑一致，非新浪主连）
 - **涨跌幅**：结算价相对前结算价 `(settle - pre_settle) / pre_settle`
 - **休息日**：基准日为非交易日时，自动展示**最近交易日**总结
+- **品种覆盖**：与 `futures_display_main_sina` 对比，输出 `coverage` / `missing_varieties`
+- **失败可见**：某交易所拉取失败写入 `fetch_errors`，不再静默忽略
 
 推送内容包含：涨/跌/平家数、涨幅/跌幅 Top N、板块均涨跌幅、成交活跃品种、后续关注提示。
 
 ```bash
-# Demo 菜单 [15]
+# Demo 菜单 [14]
 python FuturesSkillDemo.py
 
 # 收盘后 cron（工作日 15:10，Asia/Shanghai）

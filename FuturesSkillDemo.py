@@ -433,9 +433,9 @@ class FuturesSkillDemo:
   ├─ 策略库 ───────────────────────────────────────┤
   │  9. 策略库列表       10. 策略检索 / 确认       │
   │ 11. 单策略回测       12. 全策略对比回测         │
-  │ 14. 策略盘中检测       15. 每日收盘总结         │
+  │ 13. 策略盘中检测     14. 每日收盘总结           │
   ├─ 其他 ─────────────────────────────────────────┤
-  │ 13. 快捷演示流程（一键体验）                   │
+  │ 15. 快捷演示流程（一键体验）                   │
   │  0. 退出                                       │
   └────────────────────────────────────────────────┘
 """)
@@ -455,9 +455,9 @@ class FuturesSkillDemo:
             "10": self.do_strategy_search,
             "11": self.do_single_backtest,
             "12": self.do_compare_backtest,
-            "13": self.run_quick_demo,
-            "14": self.do_monitor,
-            "15": self.do_closing_summary,
+            "13": self.do_monitor,
+            "14": self.do_closing_summary,
+            "15": self.run_quick_demo,
         }
         if choice == "0":
             print("\n再见！")

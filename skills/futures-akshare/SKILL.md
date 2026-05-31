@@ -12,8 +12,19 @@ description: >-
 
 - 接口文档: [akshare_futures.md](../../akshare_futures.md)
 - 执行模块: [FuturesSkill.py](../../FuturesSkill.py)
+- 数据层: [futures_data.py](../../futures_data.py)（交易所日线并行拉取）
 - 收盘总结: [closing_summary.py](../../closing_summary.py)（独立模块）
 - 交互演示: [FuturesSkillDemo.py](../../FuturesSkillDemo.py)（菜单驱动，适合功能展示）
+
+## 数据源对照（Agent 必读）
+
+| 功能 | 命令/模块 | 数据源 | 说明 |
+|------|-----------|--------|------|
+| 回测 | `backtest` / `vnpy_engine` | `get_futures_daily` | 持仓量主力换月，非新浪主连 |
+| 盘中检测 | `monitor-strategy` / `strategy_monitor` | 新浪日线+分钟 | 主连 RB0，仅边缘触发 |
+| 收盘总结 | `closing-summary` / `closing_summary` | `get_futures_daily` 并行 | 当日持仓量最大合约 |
+
+回测与收盘总结口径一致；监控信号与回测可能略有差异，向用户说明数据源即可。
 
 ## 交互式演示
 
@@ -350,7 +361,7 @@ if r.triggered:
 
 ### 8. 每日收盘总结（OpenClaw 收盘后推送）
 
-独立模块 [`closing_summary.py`](../../closing_summary.py)，与策略库/回测逻辑隔离，可单独运行；Demo 菜单 **[15]**，Agent 也可经 `FuturesSkill.py closing-summary` 调用。
+独立模块 [`closing_summary.py`](../../closing_summary.py)，数据层 [`futures_data.py`](../../futures_data.py)；Demo 菜单 **[14]**，Agent 也可经 `FuturesSkill.py closing-summary` 调用。
 
 **用途：** 每个交易日收盘后推送简明总结；若当日为休息日，自动展示**最近交易日**数据。
 
@@ -360,8 +371,9 @@ if r.triggered:
 - 板块均涨跌幅（黑色/有色/化工/农产品/金融等）
 - 成交活跃品种
 - 后续关注提示（强势延续、超跌反弹、板块轮动、策略监控建议）
+- 品种覆盖率 / 未覆盖品种列表 / 交易所拉取异常
 
-**数据源：** akshare `get_futures_daily` + `futures_display_main_sina`（品种中文名）  
+**数据源：** akshare `get_futures_daily`（6 交易所并行、单次拉取）+ `futures_display_main_sina`（品种中文名与覆盖基准）  
 **主力定义：** 各品种当日持仓量最大合约（与回测一致，非新浪主连）
 
 **单独调用（推荐调试）：**
@@ -405,6 +417,9 @@ openclaw cron add --name "期货-收盘总结" \
 | `top_gainers` / `top_losers` | 涨跌幅排名列表 |
 | `sector_stats` | 板块统计 |
 | `follow_up_hints` | 后续关注提示 |
+| `coverage` | 品种覆盖 `{expected_count, found_count, missing_varieties, coverage_pct}` |
+| `fetch_errors` | 交易所拉取失败列表 |
+| `exchanges_ok` | 成功拉取的交易所 |
 
 Python 调用：
 
