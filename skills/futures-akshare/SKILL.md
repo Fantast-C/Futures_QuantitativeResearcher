@@ -1,7 +1,7 @@
 ---
 name: futures-akshare
 description: >-
-  AKShare 期货数据接口检索、调用与策略回测。根据 futures.md 选择 akshare 接口获取期货数据，
+  AKShare 期货数据接口检索、调用与策略回测。根据 akshare_futures.md 选择 akshare 接口获取期货数据，
   支持库存/行情/持仓/仓单/手续费等检索，策略库含双均线与海龟交易法回测，支持盘中策略信号检测（OpenClaw）。
   在用户询问期货数据、akshare 接口、期货策略回测、盘中监控、OpenClaw 期货 skill 时使用。
 ---
@@ -10,7 +10,7 @@ description: >-
 
 ## 资源
 
-- 接口文档: [futures.md](../../futures.md)
+- 接口文档: [akshare_futures.md](../../akshare_futures.md)
 - 执行模块: [FuturesSkill.py](../../FuturesSkill.py)
 - 交互演示: [FuturesSkillDemo.py](../../FuturesSkillDemo.py)（菜单驱动，适合功能展示）
 
@@ -72,7 +72,7 @@ python FuturesSkill.py add-api \
   --description "接口描述"
 ```
 
-自定义接口持久化在 `api_custom.json`，与 `futures.md` 解析结果合并。
+自定义接口持久化在 `api_custom.json`，与 `akshare_futures.md` 解析结果合并。
 
 ### 5. 策略回测（VeighNa / vnpy 引擎，非主连）
 
@@ -145,6 +145,99 @@ python FuturesSkill.py backtest-compare \
   --strategies '["ma_crossover","turtle_trading","rsi_demo"]' \
   --params-map '{"ma_crossover":{"short":10,"long":30}}'
 ```
+
+#### VeighNa 回测引擎参数详解
+
+回测底层调用 `vnpy_ctastrategy.backtesting.BacktestingEngine`，由 `vnpy_engine.run_vnpy_backtest()` 封装。参数分三层：
+
+**① 项目层（Python API / 策略 `backtest()` kwargs）**
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `symbol` | str | — | 品种/合约，见下方 symbol 解析 |
+| `start_date` | str | — | 开始日期 `YYYYMMDD` |
+| `end_date` | str | 当天 | 结束日期 `YYYYMMDD` |
+| `data_mode` | str | 自动 | `dominant` 持仓量换月；`specific` 指定合约 |
+| `capital` | int | `1000000` | 初始资金，**仅用于收益率/净值统计** |
+| `slippage` | float | `0` | 滑点（价格单位），传给 vnpy |
+| `on_progress` | callable | — | 进度回调，接收字符串消息 |
+| `verbose` | bool | `True` | 是否打印 `[1/4]~[4/4]` 进度 |
+
+CLI 的 `backtest` 子命令目前暴露 `--symbol/--start/--end/--params` 及图表选项；`capital`、`slippage` 需通过 Python API 传入：
+
+```python
+from FuturesSkill import FuturesSkill
+skill = FuturesSkill()
+result = skill.backtest_strategy(
+    "ma_crossover", "RB0",
+    start_date="20230101", end_date="20241231",
+    short_window=5, long_window=20,
+    capital=500_000,   # 初始资金
+    slippage=1.0,      # 每手滑点 1 个最小跳动
+)
+```
+
+**② vnpy `engine.set_parameters()` 映射**
+
+| vnpy 参数 | 来源 | 说明 |
+|-----------|------|------|
+| `vt_symbol` | `parse_futures_symbol()` | 如 `rb_domin.SHFE`、`rb2410.SHFE` |
+| `interval` | 固定 `Interval.DAILY` | 目前仅支持日线回测 |
+| `start` / `end` | K 线首尾 bar 时间 | 由实际数据决定，非用户字符串 |
+| `rate` | `resolve_trading_costs()` | 手续费率，按 turnover × rate 计费 |
+| `size` | akshare 手续费表 / 静态 | 合约乘数（如 RB=10） |
+| `pricetick` | akshare 手续费表 / 静态 | 最小变动价位 |
+| `slippage` | 用户 `slippage` | 成交价偏移 |
+| `capital` | 用户 `capital` | 账户初始余额 |
+
+**③ 手续费 `rate` 换算逻辑**
+
+优先级：`futures_fees_info` → `futures_comm_info` → `VARIETY_META` 静态值。
+
+`rate` 由 akshare「1 手开+平仓费用 ÷ 名义价值」换算，使 vnpy 的 `turnover * rate` 近似真实成本；固定手续费品种（如 AU）同样适用。回测结果 `params` 中会附带 `commission_rate`、`fee_source`、`fee_contract`。
+
+**④ 仓位与保证金**
+
+- 三个内置策略每次开/平仓 **固定 1 手**（`buy/sell/short/cover` 数量为 1）
+- vnpy CTA 回测 **不支持保证金比例约束**，不会因资金不足拒单
+- `capital` 不影响能否开仓，只影响 `%` 收益率与净值曲线缩放
+
+**⑤ 策略 setting（传给 vnpy CtaTemplate）**
+
+| 策略 | vnpy 类参数 | 别名（--params 可混用） |
+|------|-------------|-------------------------|
+| `ma_crossover` | `short_window`, `long_window` | `short`, `long` |
+| `turtle_trading` | `entry_window`, `exit_window` | `system=1→20/10`, `system=2→55/20` |
+| `rsi_demo` | `period`, `oversold`, `overbought` | — |
+
+**⑥ 回测输出 `BacktestResult` 字段**
+
+| 字段 | 说明 |
+|------|------|
+| `total_return_pct` | 总收益率 % |
+| `max_drawdown_pct` | 最大回撤 % |
+| `sharpe_ratio` | 夏普比率 |
+| `trade_count` | 成交笔数 |
+| `win_rate_pct` | 按盈利/亏损**日**计算的胜率 |
+| `signals` | 成交信号列表：`open_long` / `close_long` / `open_short` / `close_short` |
+| `data_mode` | `dominant` 或 `specific` |
+| `contracts_used` | 换月涉及的具体合约列表 |
+| `equity_curve` / `benchmark_curve` | 净值与价格基准（起点=100） |
+
+**⑦ 进度阶段**
+
+```
+[1/4] 解析合约
+[2/4] 拉取手续费率
+[3/4] 拉取历史 K 线（akshare 网络，最耗时）
+[4/4] vnpy 策略回测 + 统计
+```
+
+**⑧ 已知限制**
+
+- 空仓时若已处死叉/多头排列，回测会在下一根 bar **立即开空/开多**（非等下一次交叉）
+- 盘中检测仅在**边缘触发**时告警，与回测 bar 逐根执行逻辑略有差异
+- 不支持 vnpy 的 `risk_free`、多合约组合、分钟级回测
 
 ### 用户输入规范（Agent 向用户收集信息时使用）
 

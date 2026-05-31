@@ -1,5 +1,5 @@
-目的：根据akshare的期货接口数据文件“futures.md”做成skill，实现从openclaw根据需求，选择对应接口并调用，从而获取目标数据
-akshare期货数据接口文件：”futures.md“
+目的：根据akshare的期货接口数据文件“akshare_futures.md”做成skill，实现从openclaw根据需求，选择对应接口并调用，从而获取目标数据
+akshare期货数据接口文件：”akshare_futures.md“
 数据类型：期货数据
 库列表：接口库，策略库
 具体功能：

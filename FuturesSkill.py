@@ -2,7 +2,7 @@
 """
 AKShare 期货数据 Skill — 接口库 + 策略库
 
-基于 futures.md 解析 akshare 期货接口，支持：
+基于 akshare_futures.md 解析 akshare 期货接口，支持：
   1. 关键词检索并选择接口，返回接口信息与数据源
   2. 列出/检索 akshare 支持的期货数据类型
   3. 动态扩展接口库
@@ -45,7 +45,7 @@ import pandas as pd
 # 路径常量
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
-FUTURES_MD = BASE_DIR / "futures.md"
+FUTURES_MD = BASE_DIR / "akshare_futures.md"
 CUSTOM_API_JSON = BASE_DIR / "api_custom.json"
 CUSTOM_STRATEGIES_DIR = BASE_DIR / "strategies" / "custom"
 STRATEGY_MANIFEST = BASE_DIR / "strategy_registry.json"
@@ -652,10 +652,10 @@ def _build_backtest_kwargs(
 
 
 # ---------------------------------------------------------------------------
-# futures.md 解析
+# akshare_futures.md 解析
 # ---------------------------------------------------------------------------
 class FuturesMdParser:
-    """从 futures.md 解析 akshare 期货接口定义。"""
+    """从 akshare_futures.md 解析 akshare 期货接口定义。"""
 
     HEADING_RE = re.compile(r"^(#{2,5})\s+(.+)$")
     INTERFACE_RE = re.compile(r"^接口:\s*(\S+)\s*$")
@@ -1784,7 +1784,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mons.add_argument("--alert-only", action="store_true", help="仅输出触发的策略")
     p_mons.add_argument("--exit-on-alert", action="store_true", help="有信号时退出码 2")
 
-    p_parse = sub.add_parser("parse-md", help="重新解析 futures.md 并统计接口数量")
+    p_parse = sub.add_parser("parse-md", help="重新解析 akshare_futures.md 并统计接口数量")
     p_parse.set_defaults(command="parse-md")
 
     return parser
@@ -1985,7 +1985,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "parse-md":
             apis = FuturesMdParser.parse()
-            print(f"从 futures.md 解析到 {len(apis)} 个接口")
+            print(f"从 akshare_futures.md 解析到 {len(apis)} 个接口")
             for a in apis[:5]:
                 print(f"  {a.name}: {a.title}")
             return 0
