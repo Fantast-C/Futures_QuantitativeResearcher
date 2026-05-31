@@ -22,6 +22,7 @@ AKShare 期货数据 Skill — 接口库 + 策略库
   python FuturesSkill.py backtest-compare --symbol RB0 --start 20230101 --end 20241231
   python FuturesSkill.py monitor-strategy ma_crossover --symbol RB0 --interval daily --pos 0
   python FuturesSkill.py monitor-strategies --symbol RB0 --interval daily --json
+  python FuturesSkill.py closing-summary [--date YYYYMMDD] [--push] [--json]
 """
 
 from __future__ import annotations
@@ -1671,6 +1672,22 @@ class FuturesSkill:
             interval=interval, pos_map=pos_map, default_pos=default_pos,
         )
 
+    def closing_summary(
+        self,
+        *,
+        as_of_date: str | None = None,
+        top_n: int = 5,
+        on_progress: Any | None = None,
+    ):
+        """每日收盘总结（委托 closing_summary 独立模块）。"""
+        from closing_summary import run_closing_summary
+
+        return run_closing_summary(
+            as_of_date=as_of_date,
+            top_n=top_n,
+            on_progress=on_progress,
+        )
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -1786,6 +1803,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_parse = sub.add_parser("parse-md", help="重新解析 akshare_futures.md 并统计接口数量")
     p_parse.set_defaults(command="parse-md")
+
+    p_close = sub.add_parser("closing-summary", help="每日收盘总结（独立模块 closing_summary）")
+    p_close.add_argument("--date", default=None, help="基准日期 YYYYMMDD，非交易日自动回溯最近交易日")
+    p_close.add_argument("--top", type=int, default=5, help="涨跌幅排名条数")
+    p_close.add_argument("--json", action="store_true", help="JSON 输出")
+    p_close.add_argument("--push", action="store_true", help="仅输出 push_message（适合推送）")
 
     return parser
 
@@ -1988,6 +2011,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"从 akshare_futures.md 解析到 {len(apis)} 个接口")
             for a in apis[:5]:
                 print(f"  {a.name}: {a.title}")
+            return 0
+
+        if args.command == "closing-summary":
+            from closing_summary import run_closing_summary
+
+            result = run_closing_summary(
+                as_of_date=args.date,
+                top_n=args.top,
+                on_progress=lambda m: print(m, flush=True),
+            )
+            if args.push and not args.json:
+                print(result.push_message)
+            elif args.json:
+                _print_json(result)
+            else:
+                print(result.summary())
             return 0
 
     except Exception as e:

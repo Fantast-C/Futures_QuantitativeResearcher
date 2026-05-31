@@ -329,6 +329,31 @@ class FuturesSkillDemo:
         except Exception as e:
             print(f"\n⚠ 对比回测失败: {e}")
 
+    def do_closing_summary(self) -> None:
+        _title("每日收盘总结")
+        print("生成涨跌幅排名、市场广度、板块概况与后续关注提示。")
+        print("非交易日自动展示最近交易日数据。\n")
+        as_of = _prompt("基准日期 YYYYMMDD（留空=今天）", "")
+        top = int(_prompt("涨跌幅排名条数", "5") or "5")
+        push_only = _prompt("仅输出推送文案? (y/n)", "n").lower() in ("y", "yes")
+
+        print("\n正在拉取各交易所日线并汇总...", flush=True)
+        try:
+            from closing_summary import run_closing_summary
+
+            result = run_closing_summary(
+                as_of_date=as_of or None,
+                top_n=top,
+                on_progress=lambda m: print(f"  {m}", flush=True),
+            )
+            print()
+            if push_only:
+                print(result.push_message)
+            else:
+                print(result.summary())
+        except Exception as e:
+            print(f"\n⚠ 生成失败: {e}")
+
     def do_monitor(self) -> None:
         _title("策略盘中检测")
         print("检测策略是否新触发开/平仓信号（供 OpenClaw 定时推送）\n")
@@ -408,7 +433,7 @@ class FuturesSkillDemo:
   ├─ 策略库 ───────────────────────────────────────┤
   │  9. 策略库列表       10. 策略检索 / 确认       │
   │ 11. 单策略回测       12. 全策略对比回测         │
-  │ 14. 策略盘中检测                             │
+  │ 14. 策略盘中检测       15. 每日收盘总结         │
   ├─ 其他 ─────────────────────────────────────────┤
   │ 13. 快捷演示流程（一键体验）                   │
   │  0. 退出                                       │
@@ -432,13 +457,14 @@ class FuturesSkillDemo:
             "12": self.do_compare_backtest,
             "13": self.run_quick_demo,
             "14": self.do_monitor,
+            "15": self.do_closing_summary,
         }
         if choice == "0":
             print("\n再见！")
             return False
         action = actions.get(choice)
         if action is None:
-            print("\n⚠ 无效选项，请输入 0-14。")
+            print("\n⚠ 无效选项，请输入 0-15。")
         else:
             print()
             action()
@@ -450,7 +476,7 @@ class FuturesSkillDemo:
         print("首次使用建议先选择 [3] 查看全部输入规范\n")
         while True:
             self.print_menu()
-            choice = input("请选择功能 [0-14]: ").strip()
+            choice = input("请选择功能 [0-15]: ").strip()
             if not self.dispatch(choice):
                 break
 

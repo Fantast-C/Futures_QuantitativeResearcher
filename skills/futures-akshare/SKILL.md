@@ -2,8 +2,8 @@
 name: futures-akshare
 description: >-
   AKShare 期货数据接口检索、调用与策略回测。根据 akshare_futures.md 选择 akshare 接口获取期货数据，
-  支持库存/行情/持仓/仓单/手续费等检索，策略库含双均线与海龟交易法回测，支持盘中策略信号检测（OpenClaw）。
-  在用户询问期货数据、akshare 接口、期货策略回测、盘中监控、OpenClaw 期货 skill 时使用。
+  支持库存/行情/持仓/仓单/手续费等检索，策略库含双均线与海龟交易法回测，支持盘中策略信号检测、每日收盘总结推送（OpenClaw）。
+  在用户询问期货数据、akshare 接口、期货策略回测、盘中监控、收盘总结、OpenClaw 期货 skill 时使用。
 ---
 
 # AKShare 期货分析 Skill
@@ -12,6 +12,7 @@ description: >-
 
 - 接口文档: [akshare_futures.md](../../akshare_futures.md)
 - 执行模块: [FuturesSkill.py](../../FuturesSkill.py)
+- 收盘总结: [closing_summary.py](../../closing_summary.py)（独立模块）
 - 交互演示: [FuturesSkillDemo.py](../../FuturesSkillDemo.py)（菜单驱动，适合功能展示）
 
 ## 交互式演示
@@ -347,12 +348,85 @@ if r.triggered:
     print(r.alert_message)  # 推送到 OpenClaw / 企微 / 邮件
 ```
 
+### 8. 每日收盘总结（OpenClaw 收盘后推送）
+
+独立模块 [`closing_summary.py`](../../closing_summary.py)，与策略库/回测逻辑隔离，可单独运行；Demo 菜单 **[15]**，Agent 也可经 `FuturesSkill.py closing-summary` 调用。
+
+**用途：** 每个交易日收盘后推送简明总结；若当日为休息日，自动展示**最近交易日**数据。
+
+**内容包含：**
+- 市场广度（涨/跌/平家数）
+- 涨跌幅 Top N（默认 5）
+- 板块均涨跌幅（黑色/有色/化工/农产品/金融等）
+- 成交活跃品种
+- 后续关注提示（强势延续、超跌反弹、板块轮动、策略监控建议）
+
+**数据源：** akshare `get_futures_daily` + `futures_display_main_sina`（品种中文名）  
+**主力定义：** 各品种当日持仓量最大合约（与回测一致，非新浪主连）
+
+**单独调用（推荐调试）：**
+
+```bash
+python closing_summary.py
+python closing_summary.py --push              # 仅推送文案
+python closing_summary.py --json              # 结构化输出
+python closing_summary.py --date 20241231 --top 5
+```
+
+**经 FuturesSkill 封装（OpenClaw Agent）：**
+
+```bash
+python FuturesSkill.py closing-summary --push
+python FuturesSkill.py closing-summary --date 20241231 --top 5 --json
+```
+
+**OpenClaw cron 示例（工作日 15:10，日盘收盘后）：**
+
+```bash
+openclaw cron add --name "期货-收盘总结" \
+  --cron "10 15 * * 1-5" --tz Asia/Shanghai --session isolated \
+  --message "cd /Users/charleswang/Quant/Project_Futures && python3 closing_summary.py --push --json，将 push_message 推送给用户"
+```
+
+或系统 crontab：
+
+```bash
+10 15 * * 1-5 cd /Users/charleswang/Quant/Project_Futures && \
+  python3 closing_summary.py --push >> /tmp/futures-close.log 2>&1
+```
+
+**输出 JSON 关键字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `trade_date` | 实际总结的交易日 |
+| `is_rest_day` | 基准日是否为非交易日 |
+| `push_message` | 可直接推送的文本 |
+| `top_gainers` / `top_losers` | 涨跌幅排名列表 |
+| `sector_stats` | 板块统计 |
+| `follow_up_hints` | 后续关注提示 |
+
+Python 调用：
+
+```python
+from closing_summary import run_closing_summary
+# 或
+from FuturesSkill import FuturesSkill
+
+result = run_closing_summary(top_n=5)
+print(result.push_message)
+
+skill = FuturesSkill()
+result = skill.closing_summary(top_n=5)
+print(result.push_message)
+```
+
 ## 常见需求 → 接口映射
 
 | 需求关键词 | 推荐接口 |
 |-----------|---------|
 | 实时行情 | `futures_zh_spot`, `futures_zh_realtime` |
-| 历史日线 | `futures_main_sina`, `futures_zh_daily_sina`, `futures_hist_em` |
+| 历史日线 | `futures_main_sina`, `futures_zh_daily_sina`, `futures_hist_em`, `get_futures_daily` |
 | 库存/仓单 | `futures_inventory_em`, `futures_warehouse_receipt_*` |
 | 持仓排名 | `futures_dce_position_rank`, `futures_hold_pos_sina` |
 | 手续费保证金 | `futures_comm_info`, `futures_fees_info` |
